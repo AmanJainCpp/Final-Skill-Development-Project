@@ -4,10 +4,11 @@ const xlsx = require('xlsx');
 const nodemailer = require('nodemailer');
 const path = require('path');
 const dotenv = require('dotenv');
-//
-require('dotenv').config();
+const session = require('express-session');
+const bcrypt = require('bcryptjs');
 
-dotenv.config();  // Load environment variables from .env
+// Load environment variables
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -17,10 +18,70 @@ const upload = multer({ dest: 'uploads/' });
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname))); // Serve static files
 
-// Home route to serve the upload form
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
+// Set up session management
+app.use(
+    session({
+        secret: 'secret-key', // Change this in production
+        resave: false,
+        saveUninitialized: true,
+        cookie: { maxAge: 60000 } // Session expiration time (e.g., 1 minute here)
+    })
+);
+
+// Sample user for login (in-memory, replace with DB later)
+const users = [
+    {
+        id: 1,
+        username: 'admin',
+        passwordHash: bcrypt.hashSync('password123', 10) // Hashed password
+    }
+];
+
+// Serve the login page
+app.get('/login', (req, res) => {
+    if (req.session.userId) {
+        return res.redirect('/dashboard');
+    }
+    res.sendFile(path.join(__dirname, 'login.html'));
+});
+
+// Handle login POST request
+app.post('/login', (req, res) => {
+    const { username, password } = req.body;
+    const user = users.find(u => u.username === username);
+
+    if (!user) {
+        return res.send('<p>Invalid username or password</p>');
+    }
+
+    const passwordMatch = bcrypt.compareSync(password, user.passwordHash);
+    if (!passwordMatch) {
+        return res.send('<p>Invalid username or password</p>');
+    }
+
+    // Set session and redirect to dashboard
+    req.session.userId = user.id;
+    res.redirect('/dashboard');
+});
+
+// Protected dashboard route
+app.get('/dashboard', (req, res) => {
+    if (!req.session.userId) {
+        return res.redirect('/login');
+    }
+    res.sendFile(path.join(__dirname, 'views/dashboard.html')); // Serve dashboard
+});
+
+// Handle logout
+app.get('/logout', (req, res) => {
+    req.session.destroy((err) => {
+        if (err) {
+            return res.send('Error logging out.');
+        }
+        res.redirect('/login');
+    });
 });
 
 // Upload route to handle Excel file
@@ -57,8 +118,8 @@ const sendEmails = async (students) => {
     const transporter = nodemailer.createTransport({
         service: 'gmail',
         auth: {
-            user: process.env.EMAIL,       // From .env file
-            pass: process.env.PASSWORD     // From .env file
+            user: process.env.EMAIL,
+            pass: process.env.PASSWORD
         }
     });
 
@@ -68,14 +129,11 @@ const sendEmails = async (students) => {
             to: student['Parent Email'],   // Ensure this column exists in your Excel file
             subject: 'Low Attendance Warning',
             text: `Dear Parent,
-
 Your child ${student['Student Name']} (Enrollment: ${student['Enrollment Number']}) has a low attendance of ${student['Total Percentage']}%. Please ensure your child attends more classes.
-
 Regards,
 School Administration`
         };
 
-        // Send email
         try {
             await transporter.sendMail(mailOptions);
             console.log(`Email sent to ${student['Parent Email']}`);
